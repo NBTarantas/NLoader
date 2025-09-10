@@ -22,7 +22,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}}, expose_headers=["Content-Disposition"])
+# Configure CORS and expose filename header
+CORS(app, resources={r"/api/*": {"origins": "*"}}, expose_headers=["Content-Disposition"]) 
+
+# Always add CORS headers (covers errors and non-matching cases)
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    # Ensure filename can be read by browser
+    response.headers['Access-Control-Expose-Headers'] = 'Content-Disposition'
+    return response
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -284,4 +295,6 @@ def api_download_playlist():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Bind to 0.0.0.0 and Railway PORT if provided
+    port = int(os.getenv('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
