@@ -1,0 +1,26 @@
+[project]
+name = "nloader"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "audioop-lts>=0.2.2",
+    "dotenv>=0.9.9",
+    "eyed3>=0.9.8",
+    "fastapi>=0.116.1",
+    "flask>=3.1.2",
+    "flask-cors>=6.0.1",
+    "instaloader>=4.14.2",
+    "mutagen>=1.47.0",
+    "pillow>=11.3.0",
+    "pydub>=0.25.1",
+    "python-multipart>=0.0.20",
+    "requests>=2.32.5",
+    "spotipy>=2.25.1",
+    "syncedlyrics>=1.0.1",
+    "transliterate>=1.10.2",
+    "uvicorn>=0.35.0",
+    "yt-dlp>=2025.9.5",
+    "ytmusicapi>=1.11.1",
+]

@@ -1,0 +1,13 @@
+.env
+.cache
+temp_downloads/
+*.zip
+*.lrc
+*.mp3
+*.m4a
+*.flac
+*.wav
+*.ogg
+*.opus
+outh_data.py
+client/

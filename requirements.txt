@@ -1,0 +1,12 @@
+Flask
+Flask-Cors
+spotipy
+yt-dlp
+pydub
+mutagen
+requests
+syncedlyrics
+ytmusicapi
+eyed3
+pillow
+python-dotenv
