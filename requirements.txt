@@ -10,3 +10,4 @@ ytmusicapi
 eyed3
 pillow
 python-dotenv
+audioop-lts
