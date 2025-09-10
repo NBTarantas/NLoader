@@ -38,13 +38,30 @@ def add_cors_headers(response):
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configuration - Replace with your actual keys
+# Configuration via env vars
 SPOTIFY_CLIENT_ID = os.getenv('SPOTIFY_CLIENT_ID')
 SPOTIFY_CLIENT_SECRET = os.getenv('SPOTIFY_CLIENT_SECRET')
 YOUTUBE_API_KEY = os.getenv('YOUTUBE_API_KEY')
-# Initialize clients
-sp = Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET))
-ytmusic = YTMusic()
+
+# Initialize clients safely
+sp = None
+SPOTIFY_AVAILABLE = False
+try:
+    if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
+        sp = Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET))
+        SPOTIFY_AVAILABLE = True
+    else:
+        logger.warning('Spotify credentials not set; Spotify features limited')
+except Exception as e:
+    logger.error(f'Spotify init failed: {e}')
+    sp = None
+    SPOTIFY_AVAILABLE = False
+
+ytmusic = None
+try:
+    ytmusic = YTMusic()
+except Exception as e:
+    logger.error(f'YTMusic init failed: {e}')
 
 AUDIO_FORMATS = {
     'mp3': {'format': 'bestaudio/best', 'audio_format': 'mp3', 'preferred_codec': 'mp3', 'audio_quality': '320k', 'export_format': 'mp3', 'codec': None, 'ffmpeg_params': ['-codec:a', 'libmp3lame', '-q:a', '0']},
@@ -58,36 +75,63 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 def sanitize_filename(name):
     return re.sub(r'[\\/:*?"<>|]', '', name)
 
+@app.route('/api/health')
+def api_health():
+    return jsonify({
+        'status': 'healthy',
+        'spotify': 'ok' if SPOTIFY_AVAILABLE else 'missing_credentials',
+        'ytmusic': 'ok' if ytmusic else 'init_failed' if ytmusic is None else 'ok'
+    })
+
+# Spotify helpers guarded
+
 def search_spotify_tracks(query):
+    if not SPOTIFY_AVAILABLE:
+        raise RuntimeError('Spotify credentials not configured')
     results = sp.search(q=query, limit=5, type='track')
     return [{'name': t['name'], 'artist': t['artists'][0]['name'], 'url': t['external_urls']['spotify']} for t in results['tracks']['items']]
 
+# YouTube Search via Data API (optional key)
+
 def search_youtube(query):
+    if not YOUTUBE_API_KEY:
+        return []
     url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q={query}&key={YOUTUBE_API_KEY}&maxResults=5"
     response = requests.get(url).json()
-    items = [item for item in response.get('items', []) if item['id']['kind'] == 'youtube#video' and get_video_details(item['id']['videoId'])['categoryId'] == '10']
+    items = [item for item in response.get('items', []) if item['id']['kind'] == 'youtube#video' and get_video_details(item['id']['videoId']).get('categoryId') == '10']
     return [{'title': i['snippet']['title'], 'video_id': i['id']['videoId']} for i in items]
 
 def get_video_details(video_id):
+    if not YOUTUBE_API_KEY:
+        return {}
     url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={video_id}&key={YOUTUBE_API_KEY}"
-    return requests.get(url).json()['items'][0]['snippet'] if 'items' in requests.get(url).json() else {}
+    data = requests.get(url).json()
+    return data['items'][0]['snippet'] if 'items' in data and data['items'] else {}
 
 def get_spotify_track_info(url):
+    if not SPOTIFY_AVAILABLE:
+        raise RuntimeError('Spotify credentials not configured')
     track_id = url.split('/')[-1].split('?')[0]
     track = sp.track(track_id)
     return {'name': track['name'], 'artist': track['artists'][0]['name']}
 
 def get_spotify_playlist_tracks(url):
+    if not SPOTIFY_AVAILABLE:
+        raise RuntimeError('Spotify credentials not configured')
     playlist_id = url.split('/')[-1].split('?')[0]
     results = sp.playlist_items(playlist_id)
     return [{'name': i['track']['name'], 'artist': i['track']['artists'][0]['name']} for i in results['items'] if i['track']]
 
 def get_spotify_album_tracks(url):
+    if not SPOTIFY_AVAILABLE:
+        raise RuntimeError('Spotify credentials not configured')
     album_id = url.split('/')[-1].split('?')[0]
     results = sp.album_tracks(album_id)
     return [{'name': i['name'], 'artist': i['artists'][0]['name']} for i in results['items']]
 
 def download_cover(track_id):
+    if not SPOTIFY_AVAILABLE:
+        raise RuntimeError('Spotify credentials not configured')
     track = sp.track(track_id)
     if track['album']['images']:
         response = requests.get(track['album']['images'][0]['url'])
@@ -149,12 +193,12 @@ def download_track(track_name, artist, audio_format, is_spotify=True):
         output_path = os.path.join(TEMP_DIR, f"{sanitize_filename(track_name)}.{audio_format}")
     else:
         output_path = os.path.join(TEMP_DIR, f"{sanitize_filename(artist + ' - ' + track_name)}.{audio_format}")
-    
+
     query = f"{artist} {track_name}"
     video_id = ytmusic.search(query, filter='songs')[0]['videoId'] if ytmusic.search(query, filter='songs') else None
     if not video_id:
         raise ValueError('Track not found')
-    
+
     ydl_opts = {
         'format': AUDIO_FORMATS[audio_format]['format'],
         'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': AUDIO_FORMATS[audio_format]['preferred_codec'], 'preferredquality': AUDIO_FORMATS[audio_format]['audio_quality']}],
@@ -162,13 +206,13 @@ def download_track(track_name, artist, audio_format, is_spotify=True):
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
-    
+
     temp_audio_path = f"{temp_path}.{AUDIO_FORMATS[audio_format]['audio_format']}"
     process_audio(temp_audio_path, output_path, audio_format)
     time.sleep(0.5)  # Delay to release file lock
-    
+
     lyrics = get_lyrics(query, synced_only=True) or get_lyrics(query)
-    
+
     if is_spotify:
         sp_result = sp.search(query, limit=1)['tracks']['items'][0]
         cover_data = download_cover(sp_result['id'])
@@ -179,7 +223,7 @@ def download_track(track_name, artist, audio_format, is_spotify=True):
         elif audio_format == 'flac':
             add_flac_metadata(output_path, cover_data, lyrics, artist, track_name)
         time.sleep(0.5)  # Delay after metadata to release lock
-    
+
     os.remove(temp_audio_path)
     return output_path
 
@@ -193,7 +237,7 @@ def download_youtube_track(url, audio_format):
         output_path = os.path.join(TEMP_DIR, f"{sanitize_filename(track_name)}.{audio_format}")
     else:
         output_path = os.path.join(TEMP_DIR, f"{sanitize_filename(artist + ' - ' + track_name)}.{audio_format}")
-    
+
     ydl_opts = {
         'format': AUDIO_FORMATS[audio_format]['format'],
         'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': AUDIO_FORMATS[audio_format]['preferred_codec'], 'preferredquality': AUDIO_FORMATS[audio_format]['audio_quality']}],
@@ -201,11 +245,11 @@ def download_youtube_track(url, audio_format):
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
-    
+
     temp_audio_path = f"{temp_path}.{AUDIO_FORMATS[audio_format]['audio_format']}"
     process_audio(temp_audio_path, output_path, audio_format)
     time.sleep(0.5)  # Delay to release file lock
-    
+
     lyrics = get_lyrics(f"{artist} {track_name}", synced_only=True) or get_lyrics(f"{artist} {track_name}")
     thumbnail_url = info['thumbnail']
     if thumbnail_url:
@@ -223,7 +267,7 @@ def download_youtube_track(url, audio_format):
             elif audio_format == 'flac':
                 add_flac_metadata(output_path, cover_data, lyrics, artist, track_name)
             time.sleep(0.5)  # Delay after metadata to release lock
-    
+
     os.remove(temp_audio_path)
     return output_path
 
@@ -256,7 +300,7 @@ def api_download_track():
             path = download_youtube_track(url, audio_format)
         else:
             return jsonify({'error': 'Invalid URL'}), 400
-        
+
         with open(path, 'rb') as f:
             file_data = f.read()
         time.sleep(0.5)  # Delay to ensure file is released
@@ -289,7 +333,8 @@ def api_download_playlist():
                 time.sleep(0.5)  # Delay to ensure file is released
                 os.remove(path)
         zip_buf.seek(0)
-        return Response(zip_buf, mimetype='application/zip', headers={'Content-Disposition': 'attachment; filename=playlist.zip'})
+        resp = Response(zip_buf, mimetype='application/zip', headers={'Content-Disposition': 'attachment; filename=playlist.zip'})
+        return resp
     except Exception as e:
         logger.error(str(e))
         return jsonify({'error': str(e)}), 500
